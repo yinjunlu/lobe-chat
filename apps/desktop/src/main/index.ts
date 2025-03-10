@@ -10,7 +10,7 @@ let mainWindow;
 let stopIntercept;
 
 // Next.js handler
-const standaloneDir = path.join(appPath,'out', 'standalone');
+const standaloneDir = path.join(appPath, 'out', 'standalone');
 const { createInterceptor } = createHandler({
   debug: true,
   localhostUrl,
@@ -23,6 +23,7 @@ const createWindow = async () => {
   mainWindow = new BrowserWindow({
     autoHideMenuBar: true,
     height: 800,
+    titleBarStyle: 'hidden',
     webPreferences: {
       contextIsolation: true, // protect against prototype pollution
       preload: join(__dirname, '../preload/index.js'),
@@ -58,8 +59,6 @@ const createWindow = async () => {
 app.on('ready', createWindow);
 
 app.on('window-all-closed', () => app.quit());
-
-// if (process.platform !== 'darwin')
 
 app.on(
   'activate',

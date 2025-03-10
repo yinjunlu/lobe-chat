@@ -31,7 +31,11 @@ const Nav = memo(() => {
       <SideNav
         avatar={<Avatar />}
         bottomActions={<BottomActions />}
-        style={{ height: '100%', paddingTop: isDesktop ? 24 : undefined, zIndex: 100 }}
+        style={{
+          height: '100%',
+          zIndex: 100,
+          ...(isDesktop ? { background: 'transparent', paddingTop: 24 } : {}),
+        }}
         topActions={
           <Suspense>
             <Top />
