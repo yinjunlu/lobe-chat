@@ -13,7 +13,8 @@ import * as schema from '../../schemas';
 
 export const getPgliteInstance = () => {
   const client = new PGlite('lobechat-db');
-  return pgliteDrizzle({ client, schema });
+
+  return pgliteDrizzle({ client, schema }) as unknown as NeonDatabase<typeof schema>;
 };
 
 export const getDBInstance = (): NeonDatabase<typeof schema> => {

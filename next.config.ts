@@ -18,6 +18,8 @@ const isStandaloneMode = buildWithDocker || isDesktop;
 const nextConfig: NextConfig = {
   basePath,
   compress: isProd,
+  // 桌面端模式下，将输出路径改为桌面端目录下面
+  distDir: isDesktop && isProd ? 'apps/desktop/dist/next' : undefined,
   experimental: {
     optimizePackageImports: [
       'emoji-mart',

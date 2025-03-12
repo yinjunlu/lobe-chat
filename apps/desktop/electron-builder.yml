@@ -2,8 +2,10 @@ appId: com.electron.app
 productName: lobechat
 directories:
   buildResources: build
+  output: 'release',
+
 files:
-  - 'out'
+  - 'dist'
 
 asar: false
 extraResources:
