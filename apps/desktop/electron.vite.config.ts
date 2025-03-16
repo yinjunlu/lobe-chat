@@ -1,4 +1,5 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   main: {
@@ -6,6 +7,11 @@ export default defineConfig({
       outDir: 'dist/main',
     },
     plugins: [externalizeDepsPlugin({})],
+    resolve: {
+      alias: {
+        '@lobechat/web': resolve(__dirname, '../../src'),
+      },
+    },
   },
   preload: {
     build: {

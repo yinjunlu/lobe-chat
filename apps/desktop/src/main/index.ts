@@ -3,6 +3,8 @@ import { BrowserWindow, app, protocol, shell } from 'electron';
 import { createHandler } from 'next-electron-rsc';
 import path, { join } from 'node:path';
 
+// import {lambdaRouter} from "@lobechat/web/server/routers/lambda";
+
 const isDev = process.env.NODE_ENV === 'development';
 const appPath = app.getAppPath();
 const localhostUrl = 'http://localhost:3010'; // must match Next.js dev server
