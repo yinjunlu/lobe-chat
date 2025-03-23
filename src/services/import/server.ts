@@ -2,6 +2,7 @@ import { DefaultErrorShape } from '@trpc/server/unstable-core-do-not-import';
 
 import { edgeClient, lambdaClient } from '@/libs/trpc/client';
 import { useUserStore } from '@/store/user';
+import { ExportDatabaseData } from '@/types/export';
 import { ImportStage, OnImportCallbacks } from '@/types/importer';
 import { uuid } from '@/utils/uuid';
 
@@ -72,6 +73,14 @@ export class ServerService implements IImportService {
       handleError(e);
     }
   };
+
+  importPgData: IImportService['importPgData'] = async (
+    data: ExportDatabaseData,
+    options: {
+      callbacks?: OnImportCallbacks;
+      overwriteExisting?: boolean;
+    },
+  ): Promise<void> => {};
 
   private uploadWithProgress = async (
     url: string,

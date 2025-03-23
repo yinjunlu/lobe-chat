@@ -8,16 +8,21 @@ import { useTranslation } from 'react-i18next';
 import { Center } from 'react-layout-kit';
 
 import DataStyleModal from '@/components/DataStyleModal';
-import { ImportResult, ImportResults , ClientService } from '@/services/import/_deprecated';
+import { isDeprecatedEdition } from '@/const/version';
+import { importService } from '@/services/import';
+import { ClientService, ImportResult, ImportResults } from '@/services/import/_deprecated';
 import { useChatStore } from '@/store/chat';
 import { useSessionStore } from '@/store/session';
+import { ExportDatabaseData } from '@/types/export';
 import { ErrorShape, FileUploadState, ImportStage } from '@/types/importer';
-import { importConfigFile } from '@/utils/client/config';
 
 import ImportError from './Error';
 import { FileUploading } from './FileUploading';
+import ImportPreviewModal from './ImportDetail';
 import DataLoading from './Loading';
 import SuccessResult from './SuccessResult';
+import { importConfigFile } from './_deprecated';
+import { parseConfigFile } from './config';
 
 const useStyles = createStyles(({ css }) => ({
   children: css`
@@ -50,12 +55,14 @@ const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
 
   const [fileUploadingState, setUploadingState] = useState<FileUploadState | undefined>();
   const [importError, setImportError] = useState<ErrorShape | undefined>();
-  const [importData, setImportData] = useState<ImportResults | undefined>();
+  const [importResults, setImportResults] = useState<ImportResults | undefined>();
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showImportData, setShowImportData] = useState<ExportDatabaseData | undefined>(undefined);
 
   const dataSource = useMemo(() => {
-    if (!importData) return;
+    if (!importResults) return;
 
-    const { type, ...res } = importData;
+    const { type, ...res } = importResults;
 
     if (type === 'settings') return;
 
@@ -67,13 +74,13 @@ const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
         skips: value.skips,
         title: t(`importModal.result.${item as keyof ImportResults}`),
       }));
-  }, [importData]);
+  }, [importResults]);
 
   const isFinished = importState === ImportStage.Success || importState === ImportStage.Error;
 
   const closeModal = () => {
     setImportState(ImportStage.Finished);
-    setImportData(undefined);
+    setImportResults(undefined);
     setImportError(undefined);
     setUploadingState(undefined);
 
@@ -145,31 +152,42 @@ const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
       </DataStyleModal>
       <Upload
         beforeUpload={async (file) => {
-          await importConfigFile(file, async (config) => {
-            setImportState(ImportStage.Preparing);
+          if (isDeprecatedEdition) {
+            await importConfigFile(file, async (config) => {
+              setImportState(ImportStage.Preparing);
 
-            const configService = new ClientService();
+              const configService = new ClientService();
 
-            await configService.importConfigState(config, {
-              onError: (error) => {
-                setImportError(error);
-              },
-              onFileUploading: (state) => {
-                setUploadingState(state);
-              },
-              onStageChange: (stage) => {
-                setImportState(stage);
-              },
-              onSuccess: (data, duration) => {
-                if (data) setImportData(data);
-                setDuration(duration);
-              },
+              await configService.importConfigState(config, {
+                onError: (error) => {
+                  setImportError(error);
+                },
+                onFileUploading: (state) => {
+                  setUploadingState(state);
+                },
+                onStageChange: (stage) => {
+                  setImportState(stage);
+                },
+                onSuccess: (data, duration) => {
+                  if (data) setImportResults(data);
+                  setDuration(duration);
+                },
+              });
+
+              await refreshSessions();
+              await refreshMessages();
+              await refreshTopics();
             });
 
-            await refreshSessions();
-            await refreshMessages();
-            await refreshTopics();
-          });
+            return false;
+          }
+
+          const config = await parseConfigFile(file);
+
+          if (config) {
+            setShowImportData(config);
+            setShowImportModal(true);
+          }
 
           return false;
         }}
@@ -180,6 +198,33 @@ const DataImporter = memo<DataImporterProps>(({ children, onFinishImport }) => {
         {/* a very hackable solution: add a pseudo before to have a large hot zone */}
         <div className={styles.children}>{children}</div>
       </Upload>
+      {showImportData && (
+        <ImportPreviewModal
+          importData={showImportData}
+          onConfirm={async (overwriteExisting) => {
+            await importService.importPgData(showImportData, {
+              callbacks: {
+                onError: (error) => {
+                  setImportError(error);
+                },
+                onFileUploading: (state) => {
+                  setUploadingState(state);
+                },
+                onStageChange: (stage) => {
+                  setImportState(stage);
+                },
+                onSuccess: (data, duration) => {
+                  if (data) setImportResults(data);
+                  setDuration(duration);
+                },
+              },
+              overwriteExisting,
+            });
+          }}
+          onOpenChange={setShowImportModal}
+          open={showImportModal}
+        />
+      )}
     </>
   );
 });

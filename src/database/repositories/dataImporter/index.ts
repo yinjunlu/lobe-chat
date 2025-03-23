@@ -11,10 +11,18 @@ import {
   sessions,
   topics,
 } from '@/database/schemas';
+import * as SCHEMAS from '@/database/schemas';
 import { LobeChatDatabase } from '@/database/type';
 import { ImportResult } from '@/services/import/_deprecated';
+import { ExportDatabaseData } from '@/types/export';
 import { ImporterEntryData } from '@/types/importer';
 import { sanitizeUTF8 } from '@/utils/sanitizeUTF8';
+
+// 导入模式
+export enum ImportMode {
+  OVERRIDE = 'override',
+  SKIP = 'skip',
+}
 
 export class DataImporterRepos {
   private userId: string;
@@ -323,4 +331,339 @@ export class DataImporterRepos {
       topics: topicResult,
     };
   };
+
+  /**
+   * 导入 pg 导出的数据（不包含文件相关表）
+   */
+  async importPgData(
+    dbData: ExportDatabaseData,
+    mode: ImportMode = ImportMode.SKIP,
+  ): Promise<Record<string, ImportResult>> {
+    // 定义表处理顺序（基于依赖关系）
+    const tableOrder = [
+      'users',
+      'userSettings',
+      'userInstalledPlugins',
+      'aiProviders',
+      'aiModels',
+      'sessionGroups',
+      'sessions',
+      'agents',
+      'agentsToSessions',
+      'topics',
+      'messages',
+      'messagePlugins',
+      'messageTranslates',
+      'messageTTS',
+      'threads',
+    ];
+
+    // 结果统计对象
+    const results: Record<string, ImportResult> = {};
+
+    // 使用单一事务包装整个导入过程
+    await this.db.transaction(async (trx) => {
+      console.log(`Starting data import transaction (mode: ${mode})`);
+
+      const pgData = dbData.data;
+      // 初始化 ID 映射表
+      const idMappings: Record<string, Record<string, string>> = {};
+      Object.entries(pgData).forEach(([table, records]) => {
+        if (records.length > 0) {
+          idMappings[table] = {};
+        }
+      });
+
+      // 按顺序处理每个表
+      for (const tableName of tableOrder) {
+        if (!pgData[tableName] || pgData[tableName].length === 0) continue;
+
+        console.log(`Processing table: ${tableName} (${pgData[tableName].length} records)`);
+
+        try {
+          // 特殊表处理
+          if (tableName === 'messages') {
+            results[tableName] = await this.processMessages(
+              pgData[tableName],
+              trx,
+              idMappings,
+              mode,
+            );
+          }
+          // 标准表处理
+          else {
+            results[tableName] = await this.processTable(
+              tableName,
+              pgData[tableName],
+              trx,
+              idMappings,
+              mode,
+            );
+          }
+
+          console.log(
+            `Completed table ${tableName}: added=${results[tableName].added}, skips=${results[tableName].skips}, updated=${results[tableName].updated || 0}`,
+          );
+        } catch (error) {
+          console.error(`Error processing table ${tableName}:`, error);
+          results[tableName] = { added: 0, errors: 1, skips: 0 };
+        }
+      }
+
+      console.log('Data import transaction completed successfully');
+    });
+
+    return results;
+  }
+
+  /**
+   * 处理标准表数据
+   */
+  private async processTable(
+    tableName: string,
+    data: any[],
+    trx: any,
+    idMappings: Record<string, Record<string, string>>,
+    mode: ImportMode,
+  ): Promise<ImportResult> {
+    const result: ImportResult = { added: 0, errors: 0, skips: 0, updated: 0 };
+
+    if (!SCHEMAS[tableName]) {
+      console.warn(`Schema not found for table: ${tableName}`);
+      result.errors = 1;
+      return result;
+    }
+
+    const tableSchema = SCHEMAS[tableName];
+
+    // 1. 检查已存在的记录（基于 clientId 和 user_id）
+    const existingRecords = await trx.query[tableName].findMany({
+      where: and(
+        eq(tableSchema.userId, this.userId),
+        inArray(
+          tableSchema.clientId,
+          data.map((item) => item.clientId || item.id), // 支持原始 id 或已有 clientId
+        ),
+      ),
+    });
+
+    // 获取已存在记录的 clientId 映射
+    const existingClientIdMap = new Map(existingRecords.map((record) => [record.clientId, record]));
+
+    // 2. 根据模式处理数据
+    let recordsToInsert = [];
+    let recordsToUpdate = [];
+
+    for (const item of data) {
+      const clientId = item.clientId || item.id;
+      const existing = existingClientIdMap.get(clientId);
+
+      // 准备记录数据
+      const recordData = this.prepareRecordData(tableName, item, idMappings);
+
+      if (existing) {
+        // 记录已存在
+        if (mode === ImportMode.OVERRIDE) {
+          // 覆盖模式：更新记录
+          recordsToUpdate.push({ data: recordData, id: existing.id });
+        } else {
+          // 跳过模式：记录跳过
+          result.skips++;
+        }
+
+        // 无论是否更新，都需要添加到 ID 映射
+        idMappings[tableName][clientId] = existing.id;
+      } else {
+        // 记录不存在：插入新记录
+        recordsToInsert.push(recordData);
+      }
+    }
+
+    // 3. 插入新记录
+    if (recordsToInsert.length > 0) {
+      const insertedRecords = await trx
+        .insert(tableSchema)
+        .values(recordsToInsert)
+        .returning({ newId: tableSchema.id, originalId: tableSchema.clientId });
+
+      // 更新 ID 映射表
+      insertedRecords.forEach((record) => {
+        idMappings[tableName][record.originalId] = record.newId;
+      });
+
+      result.added = insertedRecords.length;
+    }
+
+    // 4. 更新现有记录（如果是覆盖模式）
+    if (recordsToUpdate.length > 0) {
+      for (const record of recordsToUpdate) {
+        await trx
+          .update(tableSchema)
+          .set({ ...record.data, updatedAt: new Date() })
+          .where(eq(tableSchema.id, record.id));
+      }
+
+      result.updatedAt = recordsToUpdate.length;
+    }
+
+    return result;
+  }
+
+  /**
+   * 准备记录数据 - 处理 ID 和外键引用
+   */
+  private prepareRecordData(
+    tableName: string,
+    item: any,
+    idMappings: Record<string, Record<string, string>>,
+  ): any {
+    // 创建新记录对象，保留原始 ID 到 clientId
+    const newItem: any = {
+      ...item,
+      clientId: item.clientId || item.id,
+      user_id: this.userId,
+    };
+
+    // 处理日期字段
+    if (newItem.created_at) newItem.created_at = new Date(newItem.created_at);
+    if (newItem.updated_at) newItem.updated_at = new Date(newItem.updated_at);
+    if (newItem.accessed_at) newItem.accessed_at = new Date(newItem.accessed_at);
+
+    // 处理外键引用 - 使用映射表替换关联 ID
+    Object.entries(newItem).forEach(([key, value]) => {
+      // 跳过 id, clientId, user_id 字段
+      if (key === 'id' || key === 'clientId' || key === 'userId') return;
+
+      // 处理外键字段 (以 Id 结尾且不是主键)
+      if (key.endsWith('Id') && value) {
+        const refTableName = this.getReferenceTableName(tableName, key);
+        if (refTableName && idMappings[refTableName] && idMappings[refTableName][value as string]) {
+          newItem[key] = idMappings[refTableName][value as string];
+        }
+      }
+    });
+
+    // 删除原始 id 字段，让数据库生成新 id
+    delete newItem.id;
+
+    return newItem;
+  }
+
+  /**
+   * 处理 messages 表的特殊情况
+   */
+  private async processMessages(
+    messages: any[],
+    trx: any,
+    idMappings: Record<string, Record<string, string>>,
+    mode: ImportMode,
+  ): Promise<ImportResult> {
+    // 1. 先处理所有消息，暂时将 parentId 设为 null
+    const messagesWithoutParent = messages.map((msg) => {
+      const newMsg = { ...msg };
+      // 保存原始 parentId 到临时字段
+      if (newMsg.parentId) {
+        newMsg._original_parentId = newMsg.parentId;
+        newMsg.parentId = null;
+      }
+      return newMsg;
+    });
+
+    // 2. 插入所有消息
+    const result = await this.processTable(
+      'messages',
+      messagesWithoutParent,
+      trx,
+      idMappings,
+      mode,
+    );
+
+    // 3. 更新 parentId 关系
+    const parentUpdates = messages
+      .filter((msg) => msg.parentId)
+      .map((msg) => {
+        const clientId = msg.id || msg.clientId;
+        const parentClientId = msg.parentId;
+
+        const newMessageId = idMappings.messages[clientId];
+        const newParentId = idMappings.messages[parentClientId];
+
+        if (newMessageId && newParentId) {
+          return {
+            messageId: newMessageId,
+            parentId: newParentId,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    // 批量更新 parentId
+    if (parentUpdates.length > 0) {
+      console.log(`Updating ${parentUpdates.length} parent-child relationships for messages`);
+
+      // 使用 CASE 语句构建批量更新
+      const caseStatements = parentUpdates.map(
+        (update) => sql`WHEN ${SCHEMAS.messages.id} = ${update.messageId} THEN ${update.parentId}`,
+      );
+
+      await trx
+        .update(SCHEMAS.messages)
+        .set({
+          parentId: sql`CASE ${sql.join(caseStatements)} ELSE ${SCHEMAS.messages.parentId} END`,
+        })
+        .where(
+          inArray(
+            SCHEMAS.messages.id,
+            parentUpdates.map((update) => update.messageId),
+          ),
+        );
+    }
+
+    return result;
+  }
+
+  /**
+   * 获取引用表名
+   * 根据字段名和表名推断引用的表
+   */
+  private getReferenceTableName(tableName: string, fieldName: string): string | null {
+    // 特殊情况处理
+    const specialCases: Record<string, Record<string, string>> = {
+      agentsToSessions: {
+        agent_id: 'agents',
+        session_id: 'sessions',
+      },
+      messages: {
+        agent_id: 'agents',
+        parentId: 'messages',
+        session_id: 'sessions',
+        topic_id: 'topics',
+      },
+      sessions: {
+        group_id: 'sessionGroups',
+      },
+      topics: {
+        session_id: 'sessions',
+      },
+    };
+
+    // 检查特殊情况
+    if (specialCases[tableName] && specialCases[tableName][fieldName]) {
+      return specialCases[tableName][fieldName];
+    }
+
+    // 通用情况 - 根据字段名推断表名
+    // 例如：session_id -> sessions, topic_id -> topics
+    const baseFieldName = fieldName.replace('_id', '');
+
+    // 处理复数形式
+    if (baseFieldName === 'agent') return 'agents';
+    if (baseFieldName === 'message') return 'messages';
+    if (baseFieldName === 'session') return 'sessions';
+    if (baseFieldName === 'topic') return 'topics';
+
+    // 如果无法推断，返回 null
+    return null;
+  }
 }

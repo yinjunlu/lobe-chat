@@ -107,4 +107,8 @@ export class ClientService {
       callbacks,
     );
   };
+
+  importPgData = async () => {
+    throw new Error('Not implemented');
+  };
 }

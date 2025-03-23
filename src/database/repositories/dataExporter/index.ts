@@ -33,13 +33,14 @@ export const DATA_EXPORT_CONFIG = {
     { table: 'aiProviders' },
     // async tasks should not be included
     // { table: 'asyncTasks' },
-    { table: 'chunks' },
-    { table: 'embeddings' },
-    { table: 'files' },
-    { table: 'fileChunks' },
-    { table: 'filesToSessions' },
-    { table: 'knowledgeBases' },
-    { table: 'knowledgeBaseFiles' },
+    // { table: 'chunks' },
+    // { table: 'unstructuredChunks' },
+    // { table: 'embeddings' },
+    // { table: 'files' },
+    // { table: 'fileChunks' },
+    // { table: 'filesToSessions' },
+    // { table: 'knowledgeBases' },
+    // { table: 'knowledgeBaseFiles' },
     { table: 'messageChunks' },
     { table: 'messagePlugins' },
     { table: 'messageQueryChunks' },
@@ -47,7 +48,7 @@ export const DATA_EXPORT_CONFIG = {
     { table: 'messageTranslates' },
     { table: 'messageTTS' },
     { table: 'messages' },
-    { table: 'messagesFiles' },
+    // { table: 'messagesFiles' },
 
     // next auth tables won't be included
     // { table: 'nextauthAccounts' },
@@ -59,7 +60,7 @@ export const DATA_EXPORT_CONFIG = {
     { table: 'sessions' },
     { table: 'threads' },
     { table: 'topics' },
-    { table: 'unstructuredChunks' },
+
   ] as BaseTableConfig[],
   relationTables: [
     {
